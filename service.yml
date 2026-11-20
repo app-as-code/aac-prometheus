@@ -1,0 +1,97 @@
+service:
+  name: aac-prometheus
+  image_repo: prom/prometheus
+  image_tag: v3.15.1
+  description: Monitoring system and time series database
+  icon: prometheus.png
+  category: Monitoring
+  stage: prod
+  hostname: prometheus
+ports:
+- name: web
+  port: 9090
+  external_port: 9090
+  protocol: TCP
+config:
+  domain_name: example.com
+  routing_port: 9090
+  generate_hostname: false
+  integrations:
+    homepage:
+      enabled: true
+    autodns:
+      enabled: true
+      create_wildcard: true
+    traefik:
+      enabled: true
+      cert_resolver: ionos
+      entrypoint: websecure
+  schema_version: 2
+volumes:
+  config:
+    description: Prometheus configuration file (prometheus.yml)
+    uid: '65534'
+    gid: '65534'
+  data:
+    description: Prometheus time-series data storage
+    uid: '65534'
+    gid: '65534'
+  rules:
+    description: Alerting & recording rule files – drop .yml files here to load without
+      restart
+    uid: '65534'
+    gid: '65534'
+  file_sd:
+    description: File-based service discovery targets – drop .yml files here (re-read
+      every 30 s)
+    uid: '65534'
+    gid: '65534'
+deployment_strategy:
+  main:
+    enabled: true
+    target_stage: prod
+  dev:
+    enabled: true
+    target_stage: dev
+deployments:
+  docker_compose:
+    restart_policy: always
+    host_base_path: /export/docker
+    command:
+    - --config.file=/etc/prometheus/prometheus.yml
+    - --storage.tsdb.path=/prometheus
+    - --storage.tsdb.retention.time=10d
+    - --storage.tsdb.retention.size=5GB
+    - --web.enable-lifecycle
+    - --web.enable-admin-api
+    volumes:
+    - config:/etc/prometheus
+    - data:/prometheus
+    - rules:/etc/prometheus/rules
+    - file_sd:/etc/prometheus/file_sd
+    environment:
+      DOCKER_TARGETS: '{{ vars.DOCKER_TARGETS }}'
+      INTERNAL_DNS_ZONE: '{{ vars.INTERNAL_DNS_ZONE }}'
+      AD_DNS_ZONE: '{{ vars.AD_DNS_ZONE }}'
+      BLACKBOX_TIMEOUT: '{{ vars.BLACKBOX_TIMEOUT }}'
+dependencies:
+  blackbox_exporter:
+    name: aac-prometheus-blackbox-exporter
+    image_repo: prom/blackbox-exporter
+    image_tag: v0.29.1
+    restart_policy: always
+    command:
+    - --config.file=/config/blackbox.yml
+    volumes:
+      config:
+        target: /config
+        description: Persistent storage for config
+vars:
+  DOCKER_TARGETS: CHANGE_ME
+  INTERNAL_DNS_ZONE: CHANGE_ME
+  AD_DNS_ZONE: CHANGE_ME
+  BLACKBOX_TIMEOUT: 5s
+  PING_TARGET: 192.0.2.1
+  DNS_AUTH_INT_TARGET: 192.0.2.1
+  DNS_AUTH_AD_TARGET: 192.0.2.2
+secrets: {}

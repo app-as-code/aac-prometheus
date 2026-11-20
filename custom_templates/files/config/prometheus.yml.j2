@@ -1,0 +1,151 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'docker-monitor'
+
+# Drop .yml rule files into the host rules/ directory; loaded without restart
+rule_files:
+  - '/etc/prometheus/rules/*.yml'
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # --- Docker Targets (Iterated from Environment List) ---
+  - job_name: 'docker'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    static_configs:
+      - targets:
+{% for target in vars.DOCKER_TARGETS.split(',') %}
+          - '{{ target.strip() }}'
+{% endfor %}
+    # Short `host` label (docker-cerberus, ...) from the target name, so
+    # dashboards can group by host+name instead of the long instance string.
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '(?:[a-z]+\.)?(?:aac-[a-z0-9-]+\.)?([a-z0-9-]+)\.(?:int|ad)\.[a-z.-]+:\d+'
+        target_label: host
+        replacement: '$1'
+    # Keep the series identity stable across container recreations:
+    # instance + name (+ image tag). cAdvisor's `id` is the cgroup path with
+    # the container ID and every docker label would otherwise ride along.
+    metric_relabel_configs:
+      - regex: 'id'
+        action: labeldrop
+      - regex: 'container_label_com_docker_compose_(config_hash|container_number|oneoff|version|depends_on|image)'
+        action: labeldrop
+      # (RE2 has no lookahead, so list the noisy label families explicitly;
+      # cAdvisor's whitelist makes this a second line of defence only)
+      - regex: 'container_label_(auto_dns_.*|traefik_.*|org_.*|io_.*|com_centurylinklabs_.*|homepage_.*|wud_.*|diun_.*|autoheal.*|maintainer|description|version|build_.*|url|vendor|licenses?|summary|title|release|architecture|documentation|revision|source|created|authors|ref_name|base_.*|name)'
+        action: labeldrop
+      # cgroup-only series without a container name carry no information for us
+      - source_labels: [__name__, name]
+        regex: 'container_.+;'
+        action: drop
+
+  # --- File-based Service Discovery (dynamic targets, refreshed every 30 s) ---
+  # Drop .yml files into the host file_sd/ directory to add new scrape targets
+  # without touching this config. Format: [{targets: [host:port], labels: {job: name}}]
+  - job_name: 'file_sd'
+    file_sd_configs:
+      - files:
+          - '/etc/prometheus/file_sd/*.yml'
+          - '/etc/prometheus/file_sd/*.yaml'
+        refresh_interval: 30s
+
+  # --- 1. Internal Ping (15s) ---
+  - job_name: 'net_ping_internal'
+    metrics_path: /probe
+    params:
+      module: [icmp_ipv4]
+    static_configs:
+      - targets: ['{{ vars.PING_TARGET }}']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'aac-prometheus-blackbox-exporter:9115'
+
+  # --- 2. DNS Resolver (30s) ---
+  - job_name: 'net_dns_resolver'
+    scrape_interval: 30s
+    metrics_path: /probe
+    params:
+      module: [dns_recursive_google]
+    static_configs:
+      - targets: ['8.8.8.8', '1.1.1.1']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'aac-prometheus-blackbox-exporter:9115'
+
+  # --- 3. DNS Auth INT (60s) ---
+  - job_name: 'net_dns_auth_int'
+    scrape_interval: 1m
+    metrics_path: /probe
+    params:
+      module: [dns_auth_int_zone]
+    static_configs:
+      - targets: ['{{ vars.DNS_AUTH_INT_TARGET }}']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'aac-prometheus-blackbox-exporter:9115'
+
+  # --- 4. DNS Auth AD (60s) ---
+  - job_name: 'net_dns_auth_ad'
+    scrape_interval: 1m
+    metrics_path: /probe
+    params:
+      module: [dns_auth_ad_zone]
+    static_configs:
+      - targets: ['{{ vars.DNS_AUTH_AD_TARGET }}']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'aac-prometheus-blackbox-exporter:9115'
+
+  # --- 5. External Ping WAN (15s) ---
+  - job_name: 'ext_ping_wan'
+    metrics_path: /probe
+    params:
+      module: [icmp_ipv4]
+    static_configs:
+      - targets: ['8.8.8.8', '1.1.1.1', '142.250.181.227']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'aac-prometheus-blackbox-exporter:9115'
+
+  # --- 6. External Web Services (2m) ---
+  - job_name: 'ext_web_services'
+    scrape_interval: 2m
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ['https://www.google.de']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'aac-prometheus-blackbox-exporter:9115'

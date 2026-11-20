@@ -1,0 +1,97 @@
+services:
+  # --- Main Application Service ---
+  aac-prometheus:
+    image: "prom/prometheus:v3.15.1"
+    container_name: "aac-prometheus"
+    hostname: "prometheus"
+    restart: "always"
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=10d"
+      - "--storage.tsdb.retention.size=5GB"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+
+    environment:
+      DOCKER_TARGETS: "${DOCKER_TARGETS:?set DOCKER_TARGETS in .env (see .env.example)}"
+      INTERNAL_DNS_ZONE: "${INTERNAL_DNS_ZONE:?set INTERNAL_DNS_ZONE in .env (see .env.example)}"
+      AD_DNS_ZONE: "${AD_DNS_ZONE:?set AD_DNS_ZONE in .env (see .env.example)}"
+      BLACKBOX_TIMEOUT: "5s"
+
+    ports:
+      - "9090:9090/tcp"
+
+    volumes:
+      - "/export/docker/aac-prometheus/config:/etc/prometheus"
+      - "/export/docker/aac-prometheus/data:/prometheus"
+      - "/export/docker/aac-prometheus/rules:/etc/prometheus/rules"
+      - "/export/docker/aac-prometheus/file_sd:/etc/prometheus/file_sd"
+
+    networks:
+      - exposed
+      - interconnect
+      - secured
+      - stack_internal
+
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.aac-prometheus.rule: "Host(`prometheus.example.com`)"
+      traefik.http.routers.aac-prometheus.entrypoints: "websecure"
+      traefik.http.routers.aac-prometheus.tls: "true"
+      traefik.http.routers.aac-prometheus.tls.certresolver: "ionos"
+      traefik.docker.network: "services-secured"
+      traefik.http.services.aac-prometheus.loadbalancer.server.port: "9090"
+      traefik.http.services.aac-prometheus.loadbalancer.server.scheme: "http"
+      auto-dns.createWildcard.aac-prometheus: "true"
+      auto-dns.customDNS.aac-prometheus: "true"
+      auto-dns.customDOMAIN.aac-prometheus: "example.com"
+      auto-dns.customHost.aac-prometheus: "prometheus"
+      homepage.group: "Monitoring"
+      homepage.name: "Prometheus"
+      homepage.href: "https://prometheus.example.com"
+      homepage.icon: "prometheus.png"
+      homepage.description: "Monitoring system and time series database"
+
+
+    depends_on:
+      aac-prometheus-blackbox-exporter:
+        condition: service_started
+
+
+  # --- Service Dependencies (Sidecars) ---
+  aac-prometheus-blackbox-exporter:
+    image: "prom/blackbox-exporter:v0.29.1"
+    container_name: "aac-prometheus-blackbox-exporter"
+    restart: "always"
+    
+    command:
+      - "--config.file=/config/blackbox.yml"
+
+    env_file:
+      - .env
+    volumes:
+      - "/export/docker/aac-prometheus/config:/config"
+
+    networks:
+      - stack_internal
+
+
+
+
+
+networks:
+  secured:
+    name: "services-secured"
+    external: true
+  exposed:
+    name: "services-exposed"
+    external: true
+  interconnect:
+    name: "docker-default"
+    external: true
+  stack_internal:
+    name: "aac-prometheus_stack_internal"
+    driver: "bridge"
+
